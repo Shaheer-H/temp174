@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Math Equation Solver</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f9;
+            margin: 40px auto;
+            max-width: 600px;
+            padding: 20px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        #upload-container {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .upload-button {
+            background-color: #5cb85c;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 0;
+            width: 95%;
+            position: relative;
+            top: 0;
+            transition: all 0.3s ease;
+        }
+
+        .upload-button:hover {
+            background-color: #4cae4c;
+            top: -5px;
+            box-shadow: 0 5px 15px rgba(92, 184, 92, 0.4);
+        }
+
+        #file-input {
+            display: none;
+        }
+
+        #preview-container {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        #preview {
+            max-width: 95%;
+            max-height: 300px;
+            margin: 20px auto;
+            border-radius: 5px;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+        }
+
+        #result {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+
+        #loading {
+            text-align: center;
+            margin: 20px 0;
+            color: #666;
+        }
+
+        .result-container {
+            background-color: #e7f3fe;
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 16px;
+            color: #333;
+        }
+
+        .clear-button {
+            background-color: #d9534f;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 10px;
+            position: relative;
+            top: 0;
+            transition: all 0.3s ease;
+        }
+
+        .clear-button:hover {
+            background-color: #c9302c;
+            top: -5px;
+            box-shadow: 0 5px 15px rgba(217, 83, 79, 0.4);
+        }
+
+        .solution {
+            font-size: 24px;
+            font-weight: bold;
+            color: #5cb85c;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Math Equation Solver</h1>
+
+    <div id="upload-container">
+        <label for="file-input" class="upload-button">
+            Choose Image
+        </label>
+        <input type="file" id="file-input" accept="image/*" required>
+    </div>
+
+    <div id="preview-container" style="display: none;">
+        <img id="preview">
+        <button id="solve-button" class="upload-button">Add to Equation</button>
+        <button id="clear-button" class="clear-button">Clear Image</button>
+        <button onclick="clearEquation()" class="clear-button">Clear Equation</button>
+    </div>
+
+    <div id="loading" style="display: none;">
+        Processing...
+    </div>
+
+    <div id="result" style="display: none;">
+        <div class="result-container">
+            <div id="detected-equation"></div>
+            <div class="solution" id="solution"></div>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('file-input');
+        const previewContainer = document.getElementById('preview-container');
+        const preview = document.getElementById('preview');
+        const result = document.getElementById('result');
+        const loading = document.getElementById('loading');
+        const solveButton = document.getElementById('solve-button');
+        const clearButton = document.getElementById('clear-button');
+
+        fileInput.addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    preview.src = e.target.result;
+                    previewContainer.style.display = 'block';
+                }
+                reader.readAsDataURL(file);
+            }
+        });
+
+        clearButton.addEventListener('click', function () {
+            previewContainer.style.display = 'none';
+            result.style.display = 'none';
+            fileInput.value = '';
+            preview.src = '';
+        });
+
+        solveButton.addEventListener('click', function () {
+            const file = fileInput.files[0];
+            if (file) {
+                uploadAndPredict(file);
+            }
+        });
+
+        function uploadAndPredict(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            loading.style.display = 'block';
+            result.style.display = 'none';
+
+            fetch('/predict', {
+                method: 'POST',
+                body: formData
+            })
+                .then(response => response.json())
+                .then(data => {
+                    loading.style.display = 'none';
+                    result.style.display = 'block';
+
+                    if (data.error) {
+                        showError(data.error);
+                    } else {
+                        document.getElementById('detected-equation').textContent =
+                            `Current Equation: ${data.equation}\nLast Detected: ${data.last_detected} (Confidence: ${data.confidence})`;
+                        document.getElementById('solution').textContent = data.solution;
+                    }
+                })
+                .catch(error => {
+                    loading.style.display = 'none';
+                    showError('An error occurred while processing the image');
+                    console.error('Error:', error);
+                });
+        }
+
+        function clearEquation() {
+            fetch('/clear', {
+                method: 'POST'
+            })
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('detected-equation').textContent = '';
+                    document.getElementById('solution').textContent = '';
+                });
+        }
+
+        function showError(message) {
+            result.innerHTML = `
+                <div class="result-container" style="background-color: #f2dede; color: #a94442;">
+                    ${message}
+                </div>
+            `;
+            result.style.display = 'block';
+        }
+    </script>
+</body>
+
+</html>
