@@ -60,52 +60,134 @@ operator_net.eval()
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def segment_symbols(image_path: str, output_dir: str = 'debug_output') -> list[np.ndarray]:
+def segment_symbols(image_path):
     # Read and preprocess image
-    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    img = cv2.imread(image_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
-    # Clean noise
-    kernel = np.ones((3,3), np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    # Get all components
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(thresh, connectivity=8)
     
-    # Find connected components
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
-    
-    # Extract and sort symbols
-    components = []
+    # Debug: Print all component stats
+    print("\nAll Components:")
     for i in range(1, num_labels):
         x, y, w, h, area = stats[i]
-        if area < 20:
+        aspect = w/h if h > 0 else 0
+        print(f"Component {i}: x={x}, y={y}, w={w}, h={h}, area={area}, aspect={aspect:.2f}")
+    
+    # Separate horizontal lines and regular components with more lenient criteria
+    horizontal_lines = []
+    regular_components = []
+    min_area = 5
+    
+    for i in range(1, num_labels):
+        x, y, w, h, area = stats[i]
+        if area < min_area:
             continue
-        symbol = binary[y:y+h, x:x+w]
-        components.append({'index': i, 'x': x, 'y': y, 'symbol': symbol})
-
-    row_threshold = np.mean([stats[i][3] for i in range(1, num_labels)]) / 2
+            
+        # More lenient horizontal line criteria
+        aspect_ratio = w / h if h > 0 else 0
+        if (aspect_ratio > 2 and h <= 15) or (w > 15 and h <= 5):  # Relaxed criteria
+            print(f"Found horizontal line: Component {i} with aspect ratio {aspect_ratio:.2f}")
+            horizontal_lines.append({'id': i, 'x': x, 'y': y, 'w': w, 'h': h})
+        else:
+            regular_components.append({'id': i, 'x': x, 'y': y, 'w': w, 'h': h})
+    
+    # Debug: Draw all components before merging
+    debug_pre = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    for comp in horizontal_lines:
+        x, y, w, h = comp['x'], comp['y'], comp['w'], comp['h']
+        cv2.rectangle(debug_pre, (x,y), (x+w,y+h), (0,0,255), 1)  # Red for horizontal lines
+    for comp in regular_components:
+        x, y, w, h = comp['x'], comp['y'], comp['w'], comp['h']
+        cv2.rectangle(debug_pre, (x,y), (x+w,y+h), (0,255,0), 1)  # Green for regular
+    cv2.imwrite('debug_output/pre_merge.png', debug_pre)
+    
+    # Merge horizontal lines into equals signs with more lenient criteria
+    merged_components = regular_components.copy()
+    horizontal_lines.sort(key=lambda x: x['y'])
+    
+    i = 0
+    while i < len(horizontal_lines) - 1:
+        line1 = horizontal_lines[i]
+        line2 = horizontal_lines[i + 1]
+        
+        vertical_gap = line2['y'] - (line1['y'] + line1['h'])
+        x_overlap = min(line1['x'] + line1['w'], line2['x'] + line2['w']) - max(line1['x'], line2['x'])
+        
+        print(f"Checking lines gap={vertical_gap}, overlap={x_overlap}")
+        
+        if vertical_gap < 15 and x_overlap > 0:  # More lenient vertical gap
+            x = min(line1['x'], line2['x'])
+            y = line1['y']
+            w = max(line1['x'] + line1['w'], line2['x'] + line2['w']) - x
+            h = line2['y'] + line2['h'] - y
+            
+            print(f"Merging lines into equals sign: x={x}, y={y}, w={w}, h={h}")
+            
+            merged_components.append({
+                'id': -1,
+                'x': x,
+                'y': y,
+                'w': w,
+                'h': h,
+                'is_equals': True
+            })
+            i += 2
+        else:
+            i += 1
     
     # Sort left to right
-    rows = []
-    current_row = [components[0]]
+    merged_components.sort(key=lambda c: c['x'])
     
-    for comp in components[1:]:
-        if abs(comp['y'] - current_row[0]['y']) < row_threshold:
-            current_row.append(comp)
-        else:
-            rows.append(sorted(current_row, key=lambda c: c['x']))
-            current_row = [comp]
-    rows.append(sorted(current_row, key=lambda c: c['x']))
+    # Draw final debug visualization
+    debug_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    for i, comp in enumerate(merged_components):
+        x, y, w, h = comp['x'], comp['y'], comp['w'], comp['h']
+        color = (0, 0, 255) if comp.get('is_equals', False) else (0, 255, 0)
+        cv2.rectangle(debug_img, (x,y), (x+w,y+h), color, 1)
+        cv2.putText(debug_img, f'{i}:{w}x{h}', (x,y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+    cv2.imwrite('debug_output/final_components.png', debug_img)
     
-    # Resize symbols to model input size (e.g., 28x28 for MNIST)
-    idx = 1
-    processed_symbols = []
-    for row in sorted(rows, key=lambda r: r[0]['y']):
-        for comp in row:
-            resized = cv2.resize(comp['symbol'], (28, 28), interpolation=cv2.INTER_AREA)
-            processed_symbols.append(resized)
-            cv2.imwrite(os.path.join(output_dir, f'symbol_{idx}_y{comp["y"]}_x{comp["x"]}.png'), resized)
-            idx += 1
+    # Extract symbols with proper padding and correct colors
+    symbol_images = []
+    for i, comp in enumerate(merged_components):
+        x, y, w, h = comp['x'], comp['y'], comp['w'], comp['h']
+        
+        # Extract base symbol
+        x1 = max(0, x)
+        y1 = max(0, y)
+        x2 = min(gray.shape[1], x + w)
+        y2 = min(gray.shape[0], y + h)
+        symbol = thresh[y1:y2, x1:x2]
+        
+        # Invert the colors (255 - symbol)
+        symbol = cv2.bitwise_not(symbol)
+        
+        # Calculate padding to make it square with plenty of border
+        max_dim = max(w, h)
+        border_size = int(max_dim * 0.5)  # 50% padding on each side
+        
+        # Add white padding (value=255 for white)
+        padded = cv2.copyMakeBorder(
+            symbol,
+            top=border_size,
+            bottom=border_size,
+            left=border_size,
+            right=border_size,
+            borderType=cv2.BORDER_CONSTANT,
+            value=255
+        )
+        
+        # Resize to final size (28x28 for MNIST-style training data)
+        final_symbol = cv2.resize(padded, (28, 28), interpolation=cv2.INTER_AREA)
+        
+        # Save debug image
+        cv2.imwrite(f'debug_output/symbol_{i}_x{x}_y{y}.png', final_symbol)
+        symbol_images.append(final_symbol)
     
-    return processed_symbols
+    return symbol_images
 
 def process_single_symbol(image_array, transform, device):
     """Process a single symbol image array"""
@@ -155,7 +237,7 @@ def predict():
             file.save(filepath)
             
             # Segment the image into individual symbols
-            symbol_images = segment_symbols(filepath, 'debug_output')
+            symbol_images = segment_symbols(filepath)
             
             if not symbol_images:
                 return jsonify({'error': 'No symbols detected in image'})
