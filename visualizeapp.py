@@ -139,7 +139,27 @@ def segment_symbols(image_path):
             i += 1
     
     # Sort left to right
-    merged_components.sort(key=lambda c: c['x'])
+    row_threshold = max(comp['h'] for comp in merged_components) * 0.5  # 50% of max height
+    merged_components.sort(key=lambda c: c['y'])  # Sort by y-coordinate first
+    
+    rows = []
+    current_row = [merged_components[0]]
+    
+    for comp in merged_components[1:]:
+        # If component is close enough vertically to current row, add it to current row
+        if abs(comp['y'] - current_row[0]['y']) < row_threshold:
+            current_row.append(comp)
+        else:
+            # Sort current row by x-coordinate and add to rows
+            rows.append(sorted(current_row, key=lambda c: c['x']))
+            current_row = [comp]
+    
+    # Add the last row
+    if current_row:
+        rows.append(sorted(current_row, key=lambda c: c['x']))
+    
+    # Flatten rows into final sorted components
+    merged_components = [comp for row in rows for comp in row]
     
     # Draw final debug visualization
     debug_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
