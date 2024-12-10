@@ -229,15 +229,16 @@ def process_single_symbol(symbol, x, y):
         value=255,
     )
     
-    # Resize to target size
-    processed_symbol = cv2.resize(padded, (target_size, target_size), interpolation=cv2.INTER_AREA)
-    
+    # Resize to target size & Makes it less jagged
+    processed_symbol = cv2.resize(padded, (target_size, target_size), interpolation=cv2.INTER_CUBIC)
+    processed_symbol = cv2.GaussianBlur(processed_symbol, (3, 3), 0)
+
     # Thresholding to clean up any artifacts
     _, processed_symbol = cv2.threshold(processed_symbol, 127, 255, cv2.THRESH_BINARY)
 
     #Reduce noise
     kernel = np.ones((2,2), np.uint8)
-    processed_symbol = cv2.morphologyEx(processed_symbol, cv2.MORPH_OPEN, kernel)
+    processed_symbol = cv2.adaptiveThreshold(processed_symbol, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
     
     return processed_symbol
 
