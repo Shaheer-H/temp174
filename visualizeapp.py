@@ -66,7 +66,7 @@ operator_net.eval()
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-
+#Ensure white background and black text
 def segment_symbols(image_path):
     # Read and preprocess image
     img = cv2.imread(image_path)
@@ -87,7 +87,7 @@ def segment_symbols(image_path):
             f"Component {i}: x={x}, y={y}, w={w}, h={h}, area={area}, aspect={aspect:.2f}"
         )
 
-    # Separate horizontal lines and regular components with more lenient criteria
+    # Separate horizontal lines and regular components
     horizontal_lines = []
     regular_components = []
     min_area = 5
@@ -97,31 +97,26 @@ def segment_symbols(image_path):
         if area < min_area:
             continue
 
-        # More lenient horizontal line criteria
         aspect_ratio = w / h if h > 0 else 0
-        if (aspect_ratio > 2 and h <= 15) or (w > 15 and h <= 5):  # Relaxed criteria
+        if (aspect_ratio > 2 and h <= 15) or (w > 15 and h <= 5):
             print(
                 f"Found horizontal line: Component {i} with aspect ratio {aspect_ratio:.2f}"
             )
             horizontal_lines.append({"id": i, "x": x, "y": y, "w": w, "h": h})
-        else:
+        else:   
             regular_components.append({"id": i, "x": x, "y": y, "w": w, "h": h})
 
-    # Debug: Draw all components before merging
+    # Draw debug visualization for pre-merge components
     debug_pre = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     for comp in horizontal_lines:
         x, y, w, h = comp["x"], comp["y"], comp["w"], comp["h"]
-        cv2.rectangle(
-            debug_pre, (x, y), (x + w, y + h), (0, 0, 255), 1
-        )  # Red for horizontal lines
+        cv2.rectangle(debug_pre, (x, y), (x + w, y + h), (0, 0, 255), 1)
     for comp in regular_components:
         x, y, w, h = comp["x"], comp["y"], comp["w"], comp["h"]
-        cv2.rectangle(
-            debug_pre, (x, y), (x + w, y + h), (0, 255, 0), 1
-        )  # Green for regular
+        cv2.rectangle(debug_pre, (x, y), (x + w, y + h), (0, 255, 0), 1)
     cv2.imwrite("debug_output/pre_merge.png", debug_pre)
 
-    # Merge horizontal lines into equals signs with more lenient criteria
+    # Merge horizontal lines into equals signs
     merged_components = regular_components.copy()
     horizontal_lines.sort(key=lambda x: x["y"])
 
@@ -135,15 +130,11 @@ def segment_symbols(image_path):
             line1["x"], line2["x"]
         )
 
-        print(f"Checking lines gap={vertical_gap}, overlap={x_overlap}")
-
-        if vertical_gap < 15 and x_overlap > 0:  # More lenient vertical gap
+        if vertical_gap < 15 and x_overlap > 0:
             x = min(line1["x"], line2["x"])
             y = line1["y"]
             w = max(line1["x"] + line1["w"], line2["x"] + line2["w"]) - x
             h = line2["y"] + line2["h"] - y
-
-            print(f"Merging lines into equals sign: x={x}, y={y}, w={w}, h={h}")
 
             merged_components.append(
                 {"id": -1, "x": x, "y": y, "w": w, "h": h, "is_equals": True}
@@ -152,29 +143,23 @@ def segment_symbols(image_path):
         else:
             i += 1
 
-    # Sort using natural reading order
-    row_threshold = (
-        max(comp["h"] for comp in merged_components) * 0.5
-    )  # 50% of max height
-    merged_components.sort(key=lambda c: c["y"])  # Sort by y-coordinate first
+    # Sort components in natural reading order
+    row_threshold = max(comp["h"] for comp in merged_components) * 0.5
+    merged_components.sort(key=lambda c: c["y"])
 
     rows = []
     current_row = [merged_components[0]]
 
     for comp in merged_components[1:]:
-        # If component is close enough vertically to current row, add it to current row
         if abs(comp["y"] - current_row[0]["y"]) < row_threshold:
             current_row.append(comp)
         else:
-            # Sort current row by x-coordinate and add to rows
             rows.append(sorted(current_row, key=lambda c: c["x"]))
             current_row = [comp]
 
-    # Add the last row
     if current_row:
         rows.append(sorted(current_row, key=lambda c: c["x"]))
 
-    # Flatten rows into final sorted components
     merged_components = [comp for row in rows for comp in row]
 
     # Draw final debug visualization
@@ -194,106 +179,135 @@ def segment_symbols(image_path):
         )
     cv2.imwrite("debug_output/final_components.png", debug_img)
 
-    # Extract symbols with proper padding and correct colors
+    # Extract and process symbols
     symbol_images = []
     for i, comp in enumerate(merged_components):
         x, y, w, h = comp["x"], comp["y"], comp["w"], comp["h"]
-
-        # Extract base symbol
+        
+        # Extract region
         x1 = max(0, x)
         y1 = max(0, y)
         x2 = min(gray.shape[1], x + w)
         y2 = min(gray.shape[0], y + h)
-        symbol = thresh[y1:y2, x1:x2]
 
-        # Invert the colors (255 - symbol)
-        symbol = cv2.bitwise_not(symbol)
+        symbol_region = thresh[y1:y2, x1:x2]
+        symbol_region = cv2.bitwise_not(symbol_region)
 
-        # Calculate padding to make it square with plenty of border
-        max_dim = max(w, h)
-        border_size = int(max_dim * 0.5)  # 50% padding on each side
+        #Save preprocessed image
+        cv2.imwrite(f"debug_output/preprocessed_symbol_{i}_x{x}_y{y}.png", symbol_region)
 
-        # Add white padding (value=255 for white)
-        padded = cv2.copyMakeBorder(
-            symbol,
-            top=border_size,
-            bottom=border_size,
-            left=border_size,
-            right=border_size,
-            borderType=cv2.BORDER_CONSTANT,
-            value=255,
-        )
-
-        # Resize to final size (28x28 for MNIST-style training data)
-        final_symbol = cv2.resize(padded, (28, 28), interpolation=cv2.INTER_AREA)
-
+        # Process symbol
+        processed_symbol = process_single_symbol(symbol_region, (x2 - x1), (y2 - y1))
+        
         # Save debug image
-        cv2.imwrite(f"debug_output/symbol_{i}_x{x}_y{y}.png", final_symbol)
-        symbol_images.append(final_symbol)
+        cv2.imwrite(f"debug_output/processed_symbol_{i}_x{x}_y{y}.png", processed_symbol)
+        symbol_images.append(processed_symbol)
 
     return symbol_images
 
-
-def process_single_symbol(image_array, transform, device):
+#Move all the above processing into the following function to reduce clutter
+def process_single_symbol(symbol, x, y):
     """Process a single symbol image array"""
-    # Convert numpy array to PIL Image
+
+    #Our dataset is mostly comprised of 400x400 images
+    target_size = 400
+    
+    # Calculate padding to make it square with border
+    max_dim = max(x, y)
+    border_size = int(max_dim * 0.5)  # 50% padding on each side
+    
+    #Maybe should try centering the image
+
+    # Add white padding
+    padded = cv2.copyMakeBorder(
+        symbol,
+        top=border_size,
+        bottom=border_size,
+        left=border_size,
+        right=border_size,
+        borderType=cv2.BORDER_CONSTANT,
+        value=255,
+    )
+    
+    # Resize to target size
+    processed_symbol = cv2.resize(padded, (target_size, target_size), interpolation=cv2.INTER_AREA)
+    
+    # Thresholding to clean up any artifacts
+    _, processed_symbol = cv2.threshold(processed_symbol, 127, 255, cv2.THRESH_BINARY)
+
+    #Reduce noise
+    kernel = np.ones((2,2), np.uint8)
+    processed_symbol = cv2.morphologyEx(processed_symbol, cv2.MORPH_OPEN, kernel)
+    
+    return processed_symbol
+
+def to_tensor(image_array, transform, device):
+     # Convert numpy array to PIL Image
     image = Image.fromarray(image_array)
-    image = image.convert("L")
     # Apply transforms
     image_tensor = transform(image).unsqueeze(0).to(device)
+
     return image_tensor
 
-
-def get_prediction(image_tensor, digit_net, operator_net, operator_mapping):
+def get_prediction(image_tensor, digit_net, operator_net, operator_mapping, symbol_num):
     """Get prediction for a single symbol"""
     with torch.no_grad():
         #Get predictions for digit and operator
         digit_output = digit_net(image_tensor)
         operator_output = operator_net(image_tensor)
 
-        #Convert predictions to probabilities, use highest probability to determine prediction and confidence
+        #Convert predictions to probabilities 
         digit_probs = torch.nn.functional.softmax(digit_output, dim=1)
         operator_probs = torch.nn.functional.softmax(operator_output, dim=1)
 
+        #Use highest probability to determine prediction and confidence
         digit_conf, digit_pred = torch.max(digit_probs, 1)
         operator_conf, operator_pred = torch.max(operator_probs, 1)
 
-        digitConfidenceValue = float(digit_conf.item())
-        operatorConfidenceValue = float(operator_conf.item())
+        #Convert data from tensor to readable values
+        digitPrediction = digit_pred.item()
+        digitConfidence = float(digit_conf.item())
+        
+        operatorPrediction = operator_pred.item()
+        operatorConfidence = float(operator_conf.item())
 
-        #Format probabilities for verification
-        modelPredictions = {
-            'digits %' : {
-                str(i): float(prob) for i, prob in enumerate(digit_probs[0])
-            },
-            'operator_probabilities': {
-                operator_mapping[i]: float(prob) for i, prob in enumerate(operator_probs[0])
-            },
-            'top_digit': {
-                'prediction': str(digit_pred.item()),
-                'confidence': digitConfidenceValue
-            },
-            'top_operator': {
-                'prediction': operator_mapping[operator_pred.item()],
-                'confidence': operatorConfidenceValue
-            }
-        }
+        #Save Output in debug_outputs
+        save_predictions(digit_probs, operator_probs, digitPrediction, digitConfidence, operatorPrediction, operatorConfidence, symbol_num)
 
-        #Figure out what # symbol we are processing to use in file name
-        existing_files = [f for f in os.listdir('debug_output') if f.startswith('prediction_debug_')]
-        debug_file = f'debug_output/prediction_debug_{len(existing_files)}.json'
-
-        #Write file with model predictions in debug_outputs
-        with open(debug_file, 'w') as f:
-            json.dump(modelPredictions, f, indent=2)
-
-        #Choose to return digit or operator based on the model's confidence
-        if digit_conf > operator_conf:
-            return str(digit_pred.item()), float()
+        #IDEA: Maybe use thresholds to ensure a base level of confidence?
+        #Choose to return digit or operator based on each model's confidence
+        if digitConfidence > operatorConfidence:
+            return str(digitPrediction), float(digitConfidence)
+        elif operatorConfidence > digitConfidence:
+            return operator_mapping[operatorPrediction], float(operatorConfidence)
+        #Model is unsure
         else:
-            operator_idx = operator_pred.item()
-            return operator_mapping[operator_idx], float(operator_conf.item())
+            return -1
 
+def save_predictions(digit_probs, oper_probs, digi_pred, digit_conf, oper_pred, oper_conf, symbol_num):
+    #Format probabilities for verification
+    modelPredictions = {
+        'digits_probabilities' : {
+            str(i): float(prob) for i, prob in enumerate(digit_probs[0])
+            },
+        'operator_probabilities': {
+            operator_mapping[i]: float(prob) for i, prob in enumerate(oper_probs[0])
+            },
+        'most_likely_digit': {
+            'prediction': str(digi_pred),
+            'confidence': digit_conf
+            },
+        'most_likely_operator': {
+            'prediction': operator_mapping[oper_pred],
+            'confidence': oper_conf
+            }
+        }    
+
+    debug_file = f'debug_output/prediction_debug_{symbol_num}.json'
+
+    #Write file with model predictions in debug_outputs
+    with open(debug_file, 'w') as f:
+        json.dump(modelPredictions, f, indent=2)
 
 @app.route("/")
 def home():
@@ -334,14 +348,16 @@ def predict():
             detected_symbols = []
             confidences = []
 
+            symbol_count = 0
             for symbol_image in symbol_images:
                 # Convert to uint8 if not already
                 if symbol_image.dtype != np.uint8:
                     symbol_image = (symbol_image * 255).astype(np.uint8)
-                image_tensor = process_single_symbol(symbol_image, transform, device)
+                image_tensor = to_tensor(symbol_image, transform, device)
                 symbol, confidence = get_prediction(
-                    image_tensor, digit_net, operator_net, operator_mapping
+                    image_tensor, digit_net, operator_net, operator_mapping, symbol_count
                 )
+                symbol_count += 1
                 detected_symbols.append(symbol)
                 confidences.append(confidence)
 
