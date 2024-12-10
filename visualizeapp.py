@@ -1,6 +1,6 @@
 from flask import Flask, request, render_template, jsonify
 import os
-from model import DigitNet, OperatorNet
+from model import ImprovedNet
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
@@ -24,8 +24,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Load models
-digit_net = DigitNet().to(device)
-operator_net = OperatorNet().to(device)
+digit_net = ImprovedNet(num_classes=10).to(device)    # 10 classes for digits
+operator_net = ImprovedNet(num_classes=9).to(device)  # 9 classes for operators
 
 # Define class mappings
 operator_mapping = {
@@ -40,14 +40,14 @@ operator_mapping = {
     8: 'z'     # variable z
 }
 
-# Load trained weights with CPU fallback
+# Load trained weights
 try:
     digit_net.load_state_dict(torch.load('weights/digit_net_best.pth', 
-                                        map_location=device,
-                                        weights_only=True))
+                                       map_location=device,
+                                       weights_only=True))
     operator_net.load_state_dict(torch.load('weights/operator_net_best.pth', 
-                                           map_location=device,
-                                           weights_only=True))
+                                          map_location=device,
+                                          weights_only=True))
     print("Model weights loaded successfully")
 except Exception as e:
     print(f"Error loading model weights: {e}")
