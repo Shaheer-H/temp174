@@ -1,5 +1,6 @@
 from flask import Flask, request, render_template, jsonify
 import os
+import json
 from model import DigitNet, OperatorNet
 import torch
 import torchvision.transforms as transforms
@@ -246,17 +247,49 @@ def process_single_symbol(image_array, transform, device):
 def get_prediction(image_tensor, digit_net, operator_net, operator_mapping):
     """Get prediction for a single symbol"""
     with torch.no_grad():
+        #Get predictions for digit and operator
         digit_output = digit_net(image_tensor)
         operator_output = operator_net(image_tensor)
 
+        #Convert predictions to probabilities, use highest probability to determine prediction and confidence
         digit_probs = torch.nn.functional.softmax(digit_output, dim=1)
         operator_probs = torch.nn.functional.softmax(operator_output, dim=1)
 
         digit_conf, digit_pred = torch.max(digit_probs, 1)
         operator_conf, operator_pred = torch.max(operator_probs, 1)
 
+        digitConfidenceValue = float(digit_conf.item())
+        operatorConfidenceValue = float(operator_conf.item())
+
+        #Format probabilities for verification
+        modelPredictions = {
+            'digits %' : {
+                str(i): float(prob) for i, prob in enumerate(digit_probs[0])
+            },
+            'operator_probabilities': {
+                operator_mapping[i]: float(prob) for i, prob in enumerate(operator_probs[0])
+            },
+            'top_digit': {
+                'prediction': str(digit_pred.item()),
+                'confidence': digitConfidenceValue
+            },
+            'top_operator': {
+                'prediction': operator_mapping[operator_pred.item()],
+                'confidence': operatorConfidenceValue
+            }
+        }
+
+        #Figure out what # symbol we are processing to use in file name
+        existing_files = [f for f in os.listdir('debug_output') if f.startswith('prediction_debug_')]
+        debug_file = f'debug_output/prediction_debug_{len(existing_files)}.json'
+
+        #Write file with model predictions in debug_outputs
+        with open(debug_file, 'w') as f:
+            json.dump(modelPredictions, f, indent=2)
+
+        #Choose to return digit or operator based on the model's confidence
         if digit_conf > operator_conf:
-            return str(digit_pred.item()), float(digit_conf.item())
+            return str(digit_pred.item()), float()
         else:
             operator_idx = operator_pred.item()
             return operator_mapping[operator_idx], float(operator_conf.item())
