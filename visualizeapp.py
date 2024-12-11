@@ -361,13 +361,17 @@ def predict():
                 confidences.append(confidence)
 
             # Build equation string
-            equation = " ".join(detected_symbols)
+            equation = "".join(detected_symbols)
 
             # Try to evaluate the equation
             try:
                 calc_eq = equation.replace("×", "*").replace("÷", "/")
                 if "=" in calc_eq:
-                    solution = "Equations not supported yet"
+                    expression = equation.replace("=","")
+                    operation = "simplify"
+                    req = requests.get(f"https://newton.now.sh/api/v2/{operation}/{expression}")
+                    data = req.json()
+                    solution = data["result"]
                 else:
                     try:
                         result = eval(calc_eq)
