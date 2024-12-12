@@ -1,7 +1,7 @@
 from flask import Flask, request, render_template, jsonify
 import os
 import json
-from model import ImprovedNet
+from model import CombinedNet
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
@@ -9,6 +9,7 @@ import requests
 from werkzeug.utils import secure_filename
 import cv2
 import numpy as np
+import torch.nn.functional as F
 
 app = Flask(__name__)
 
@@ -26,40 +27,20 @@ os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Load models
-digit_net = ImprovedNet(num_classes=10).to(device)    # 10 classes for digits
-operator_net = ImprovedNet(num_classes=9).to(device)  # 9 classes for operators
-
-# Define class mappings
-operator_mapping = {
-    0: "+",  # add
-    1: ".",  # dec
-    2: "÷",  # div
-    3: "=",  # eq
-    4: "×",  # mul
-    5: "-",  # sub
-    6: "x",  # variable x
-    7: "y",  # variable y
-    8: "z",  # variable z
-}
+# Load single model instead of two
+model = CombinedNet().to(device)
 
 # Load trained weights
 try:
-    digit_net.load_state_dict(torch.load('weights/digit_net_best.pth', 
-                                       map_location=device,
-                                       weights_only=True))
-    operator_net.load_state_dict(torch.load('weights/operator_net_best.pth', 
-                                          map_location=device,
-                                          weights_only=True))
+    model.load_state_dict(torch.load('weights/combined_net_best.pth', 
+                                   map_location=device))
     print("Model weights loaded successfully")
 except Exception as e:
     print(f"Error loading model weights: {e}")
     raise
 
-# Set models to evaluation mode
-digit_net.eval()
-operator_net.eval()
-
+# Set model to evaluation mode
+model.eval()
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -248,59 +229,48 @@ def to_tensor(image_array, transform, device):
 
     return image_tensor
 
-def get_prediction(image_tensor, digit_net, operator_net, operator_mapping, symbol_num):
-    """Get prediction for a single symbol"""
+def get_prediction(image_tensor, model):
+    """Get prediction using the three-headed model"""
     with torch.no_grad():
-        #Get predictions for digit and operator
-        digit_output = digit_net(image_tensor)
-        operator_output = operator_net(image_tensor)
-
-        #Convert predictions to probabilities 
-        digit_probs = torch.nn.functional.softmax(digit_output, dim=1)
-        operator_probs = torch.nn.functional.softmax(operator_output, dim=1)
-
-        #Use highest probability to determine prediction and confidence
-        digit_conf, digit_pred = torch.max(digit_probs, 1)
-        operator_conf, operator_pred = torch.max(operator_probs, 1)
-
-        #Convert data from tensor to readable values
-        digitPrediction = digit_pred.item()
-        digitConfidence = float(digit_conf.item())
+        type_out, digit_out, operator_out = model(image_tensor)
         
-        operatorPrediction = operator_pred.item()
-        operatorConfidence = float(operator_conf.item())
-
-        #Save Output in debug_outputs
-        save_predictions(digit_probs, operator_probs, digitPrediction, digitConfidence, operatorPrediction, operatorConfidence, symbol_num)
-
-        #IDEA: Maybe use thresholds to ensure a base level of confidence?
-        #Choose to return digit or operator based on each model's confidence
-        if digitConfidence > operatorConfidence:
-            return str(digitPrediction), float(digitConfidence)
-        elif operatorConfidence > digitConfidence:
-            return operator_mapping[operatorPrediction], float(operatorConfidence)
-        #Model is unsure
-        else:
-            return -1
+        # Get type prediction first
+        type_probs = F.softmax(type_out, dim=1)
+        type_conf, type_pred = torch.max(type_probs, 1)
+        
+        # Based on type, get either digit or operator prediction
+        if type_pred.item() == 0:  # Digit
+            digit_probs = F.softmax(digit_out, dim=1)
+            conf, pred = torch.max(digit_probs, 1)
+            symbol = str(pred.item())  # Convert digit to string
+        else:  # Operator
+            operator_probs = F.softmax(operator_out, dim=1)
+            conf, pred = torch.max(operator_probs, 1)
+            from model import operator_classes  # Import operator_classes
+            symbol = operator_classes[pred.item()]
+            
+        return symbol, conf.item()
 
 def save_predictions(digit_probs, oper_probs, digi_pred, digit_conf, oper_pred, oper_conf, symbol_num):
+    from model import operator_classes  # Import operator_classes
+    
     #Format probabilities for verification
     modelPredictions = {
         'digits_probabilities' : {
             str(i): float(prob) for i, prob in enumerate(digit_probs[0])
-            },
+        },
         'operator_probabilities': {
-            operator_mapping[i]: float(prob) for i, prob in enumerate(oper_probs[0])
-            },
+            operator_classes[i]: float(prob) for i, prob in enumerate(oper_probs[0])
+        },
         'most_likely_digit': {
             'prediction': str(digi_pred),
             'confidence': digit_conf
-            },
+        },
         'most_likely_operator': {
-            'prediction': operator_mapping[oper_pred],
+            'prediction': operator_classes[oper_pred],
             'confidence': oper_conf
-            }
-        }    
+        }
+    }    
 
     debug_file = f'debug_output/prediction_debug_{symbol_num}.json'
 
@@ -354,7 +324,7 @@ def predict():
                     symbol_image = (symbol_image * 255).astype(np.uint8)
                 image_tensor = to_tensor(symbol_image, transform, device)
                 symbol, confidence = get_prediction(
-                    image_tensor, digit_net, operator_net, operator_mapping, symbol_count
+                    image_tensor, model
                 )
                 symbol_count += 1
                 detected_symbols.append(symbol)
