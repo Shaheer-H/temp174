@@ -402,16 +402,32 @@ def predict():
             
             # Build response
             try:
-                equation = ' '.join(detected_symbols)
-                print(f"Final equation: {equation}")
+                equation = ''.join(detected_symbols)
+                calc_eq = equation.replace("add", "+").replace("sub", "-").replace("mul", "*").replace("div", "%").replace("eq", "=").replace("dec", ".")
+                print(f"Final equation: {calc_eq}")
                 
+                if "=" in calc_eq:
+                    #Solving for a variable
+                    #Implement system of equations
+                    if "x" or "y" or "z" in calc_eq:
+                        calc_eq = calc_eq.replace()
+                    
+                    expression = calc_eq.replace("=", "")
+                    operation = "simplify"
+                    
+                    req = requests.get(f"https://newton.now.sh/api/v2/{operation}/{expression}")
+                    data = req.json()
+                    solution = data["result"]
+                else:
+                    solution = calc_eq
+                    
                 last_symbol = detected_symbols[-1] if detected_symbols else ""
                 last_confidence = confidences[-1] if confidences else 0
                 avg_confidence = sum(confidences) / len(confidences) if confidences else 0
                 
                 response = {
                     'equation': equation,
-                    'solution': "Building equation: " + equation,
+                    'solution': "Building equation: " + solution,
                     'confidence': f"{avg_confidence * 100:.2f}%",
                     'num_symbols': len(detected_symbols),
                     'last_symbol': last_symbol,
