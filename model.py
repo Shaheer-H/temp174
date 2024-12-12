@@ -8,8 +8,9 @@ import torchvision.transforms as transforms
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+import os
 
-# Get class information from data directories
+# Define the classes based on the folders
 digit_classes = sorted(os.listdir('./data/digits'))
 operator_classes = sorted(os.listdir('./data/operators'))
 
@@ -70,6 +71,35 @@ class CombinedNet(nn.Module):
         operator_out = self.operator_fc(features)  # If operator, which one?
         
         return type_out, digit_out, operator_out
+
+    def predict_with_threshold(self, image_tensor, type_threshold=0.8):
+        """Make prediction with confidence threshold"""
+        self.eval()
+        with torch.no_grad():
+            # Get predictions
+            type_out, digit_out, operator_out = self(image_tensor)
+            
+            # Get all probabilities
+            type_prob = F.softmax(type_out, dim=1)
+            digit_prob = F.softmax(digit_out, dim=1)
+            operator_prob = F.softmax(operator_out, dim=1)
+            
+            type_conf, type_pred = torch.max(type_prob, 1)
+            digit_conf, digit_pred = torch.max(digit_prob, 1)
+            operator_conf, operator_pred = torch.max(operator_prob, 1)
+            
+            # Only trust type prediction if confident enough
+            if type_conf >= type_threshold:
+                if type_pred == 0:  # Digit
+                    return 'digit', digit_pred.item(), digit_conf.item()
+                else:  # Operator
+                    return 'operator', operator_pred.item(), operator_conf.item()
+            else:
+                # If not confident about type, use highest confidence between digit and operator
+                if digit_conf > operator_conf:
+                    return 'digit', digit_pred.item(), digit_conf.item()
+                else:
+                    return 'operator', operator_pred.item(), operator_conf.item()
 
     def get_num_classes(self):
         """Return the number of classes for each head"""

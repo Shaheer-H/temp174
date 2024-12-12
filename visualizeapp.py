@@ -1,7 +1,7 @@
 from flask import Flask, request, render_template, jsonify
 import os
 import json
-from model import CombinedNet
+from model import CombinedNet, digit_classes, operator_classes
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
@@ -22,12 +22,13 @@ app.config["UPLOAD_FOLDER"] = os.path.join(
 
 # Ensure required directories exist
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+os.makedirs("debug_output", exist_ok=True)
 
 # Determine device
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Load single model instead of two
+# Load single combined model
 model = CombinedNet().to(device)
 
 # Load trained weights
@@ -184,10 +185,35 @@ def segment_symbols(image_path):
 
     return symbol_images
 
-#Move all the above processing into the following function to reduce clutter
+def fill_symbol(image):
+    """Fill in outlined symbols to match training data style"""
+    # Ensure we have black text on white background
+    if image[0, 0] == 0:  # if background is black
+        image = cv2.bitwise_not(image)
+        
+    # Find contours with hierarchy
+    contours, hierarchy = cv2.findContours(
+        cv2.bitwise_not(image),  # invert to find black text
+        cv2.RETR_CCOMP,  # retrieve all contours and organize them into a hierarchy
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+    
+    # Create a mask for filling
+    mask = np.ones_like(image) * 255
+    
+    # Fill all contours
+    for i, contour in enumerate(contours):
+        cv2.drawContours(mask, [contour], -1, 0, -1)  # -1 thickness means fill
+        
+    # Save debug image of contours
+    debug_contours = cv2.cvtColor(image.copy(), cv2.COLOR_GRAY2BGR)
+    cv2.drawContours(debug_contours, contours, -1, (0,255,0), 1)
+    cv2.imwrite("debug_output/contours_debug.png", debug_contours)
+    
+    return mask
+
 def process_single_symbol(symbol, x, y):
     """Process a single symbol image array"""
-
     #Our dataset is mostly comprised of 400x400 images
     target_size = 400
     
@@ -195,8 +221,6 @@ def process_single_symbol(symbol, x, y):
     max_dim = max(x, y)
     border_size = int(max_dim * 0.5)  # 50% padding on each side
     
-    #Maybe should try centering the image
-
     # Add white padding
     padded = cv2.copyMakeBorder(
         symbol,
@@ -215,66 +239,125 @@ def process_single_symbol(symbol, x, y):
     # Thresholding to clean up any artifacts
     _, processed_symbol = cv2.threshold(processed_symbol, 127, 255, cv2.THRESH_BINARY)
 
-    #Reduce noise
-    kernel = np.ones((2,2), np.uint8)
-    processed_symbol = cv2.adaptiveThreshold(processed_symbol, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    # Fill in the symbol to match training data style
+    filled_symbol = fill_symbol(processed_symbol)
     
-    return processed_symbol
+    # Save filled symbol before further processing
+    cv2.imwrite(f"debug_output/filled_symbol_x{x}_y{y}.png", filled_symbol)
+
+    # Return the filled version instead of applying more processing
+    return filled_symbol
 
 def to_tensor(image_array, transform, device):
-     # Convert numpy array to PIL Image
+    """Convert image array to tensor with debugging"""
+    # Convert numpy array to PIL Image
     image = Image.fromarray(image_array)
-    # Apply transforms
-    image_tensor = transform(image).unsqueeze(0).to(device)
+    
+    # Save the image before transforms
+    image.save(f"debug_output/before_transform.png")
+    
+    # Apply each transform separately for debugging
+    resized = transforms.Resize((32, 32))(image)
+    resized.save(f"debug_output/after_resize.png")
+    
+    # Convert to tensor
+    tensor = transforms.ToTensor()(resized)
+    
+    # Convert tensor back to image for visualization
+    pil_image = transforms.ToPILImage()(tensor)
+    pil_image.save(f"debug_output/after_to_tensor.png")
+    
+    # Apply normalization
+    normalized = transforms.Normalize((0.5,), (0.5,))(tensor)
+    
+    # Convert normalized tensor to image for visualization
+    # Denormalize first: pixel = (pixel * std) + mean
+    denorm = normalized.clone()
+    denorm = denorm * 0.5 + 0.5
+    denorm_image = transforms.ToPILImage()(denorm)
+    denorm_image.save(f"debug_output/after_normalize.png")
+    
+    # Add batch dimension and move to device
+    final_tensor = normalized.unsqueeze(0).to(device)
+    
+    return final_tensor
 
-    return image_tensor
+# Define transform globally
+transform = transforms.Compose([
+    transforms.Resize((32, 32)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
 
-def get_prediction(image_tensor, model):
-    """Get prediction using the three-headed model"""
+def get_prediction(image_tensor, model, symbol_num=0, type_threshold=0.8):
+    """Get prediction using the three-headed model with threshold-based decision"""
     with torch.no_grad():
+        # Use the new predict_with_threshold method
+        pred_type, pred_idx, confidence = model.predict_with_threshold(image_tensor, type_threshold)
+        
+        # Print detailed debugging information
+        print(f"\nDetailed prediction for symbol {symbol_num}:")
         type_out, digit_out, operator_out = model(image_tensor)
         
-        # Get type prediction first
+        # Get all probabilities for debugging
         type_probs = F.softmax(type_out, dim=1)
-        type_conf, type_pred = torch.max(type_probs, 1)
+        digit_probs = F.softmax(digit_out, dim=1)
+        operator_probs = F.softmax(operator_out, dim=1)
         
-        # Based on type, get either digit or operator prediction
-        if type_pred.item() == 0:  # Digit
-            digit_probs = F.softmax(digit_out, dim=1)
-            conf, pred = torch.max(digit_probs, 1)
-            symbol = str(pred.item())  # Convert digit to string
-        else:  # Operator
-            operator_probs = F.softmax(operator_out, dim=1)
-            conf, pred = torch.max(operator_probs, 1)
-            from model import operator_classes  # Import operator_classes
-            symbol = operator_classes[pred.item()]
+        print(f"Type prediction confidence: {type_probs.max().item():.4f}")
+        
+        print("\nTop 3 Digit probabilities:")
+        digit_probs_np = digit_probs.cpu().numpy()[0]
+        top_digits = np.argsort(digit_probs_np)[-3:][::-1]
+        for idx in top_digits:
+            print(f"{digit_classes[idx]}: {digit_probs_np[idx]:.4f}")
             
-        return symbol, conf.item()
+        print("\nTop 3 Operator probabilities:")
+        operator_probs_np = operator_probs.cpu().numpy()[0]
+        top_operators = np.argsort(operator_probs_np)[-3:][::-1]
+        for idx in top_operators:
+            print(f"{operator_classes[idx]}: {operator_probs_np[idx]:.4f}")
+        
+        # Get final symbol based on prediction type
+        if pred_type == 'digit':
+            symbol = digit_classes[pred_idx]
+            print(f"\nFinal prediction: DIGIT {symbol} (confidence: {confidence:.4f})")
+        else:
+            symbol = operator_classes[pred_idx]
+            print(f"\nFinal prediction: OPERATOR {symbol} (confidence: {confidence:.4f})")
+        
+        # Save debug information
+        save_predictions(
+            digit_probs.cpu().numpy(),
+            operator_probs.cpu().numpy(),
+            pred_idx if pred_type == 'digit' else -1,
+            confidence if pred_type == 'digit' else 0.0,
+            pred_idx if pred_type == 'operator' else -1,
+            confidence if pred_type == 'operator' else 0.0,
+            symbol_num
+        )
+            
+        return symbol, confidence
 
 def save_predictions(digit_probs, oper_probs, digi_pred, digit_conf, oper_pred, oper_conf, symbol_num):
-    from model import operator_classes  # Import operator_classes
-    
-    #Format probabilities for verification
     modelPredictions = {
-        'digits_probabilities' : {
-            str(i): float(prob) for i, prob in enumerate(digit_probs[0])
+        'digits_probabilities': {
+            digit_classes[i]: float(prob) for i, prob in enumerate(digit_probs[0])
         },
         'operator_probabilities': {
             operator_classes[i]: float(prob) for i, prob in enumerate(oper_probs[0])
         },
         'most_likely_digit': {
-            'prediction': str(digi_pred),
+            'prediction': digit_classes[digi_pred] if digi_pred != -1 else "none",
             'confidence': digit_conf
         },
         'most_likely_operator': {
-            'prediction': operator_classes[oper_pred],
+            'prediction': operator_classes[oper_pred] if oper_pred != -1 else "none",
             'confidence': oper_conf
         }
     }    
 
     debug_file = f'debug_output/prediction_debug_{symbol_num}.json'
-
-    #Write file with model predictions in debug_outputs
     with open(debug_file, 'w') as f:
         json.dump(modelPredictions, f, indent=2)
 
@@ -285,92 +368,68 @@ def home():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"})
-
-    file = request.files["file"]
-    if file.filename == "":
-        return jsonify({"error": "No file selected"})
-
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'})
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'})
+    
     if file and allowed_file(file.filename):
         try:
             # Save uploaded file
             filename = secure_filename(file.filename)
-            filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(filepath)
 
             # Segment the image into individual symbols
             symbol_images = segment_symbols(filepath)
-
+            print(f"Found {len(symbol_images)} symbols")
+            
             if not symbol_images:
-                return jsonify({"error": "No symbols detected in image"})
-
+                return jsonify({'error': 'No symbols detected in image'})
+            
             # Process each symbol
-            transform = transforms.Compose(
-                [
-                    transforms.Resize((32, 32)),
-                    transforms.ToTensor(),
-                    transforms.Normalize((0.5,), (0.5,)),
-                ]
-            )
-
             detected_symbols = []
             confidences = []
-
-            symbol_count = 0
-            for symbol_image in symbol_images:
-                # Convert to uint8 if not already
-                if symbol_image.dtype != np.uint8:
-                    symbol_image = (symbol_image * 255).astype(np.uint8)
+            
+            for i, symbol_image in enumerate(symbol_images):
                 image_tensor = to_tensor(symbol_image, transform, device)
-                symbol, confidence = get_prediction(
-                    image_tensor, model
-                )
-                symbol_count += 1
+                symbol, confidence = get_prediction(image_tensor, model, symbol_num=i)
+                print(f"Symbol {i}: {symbol} (confidence: {confidence:.2f})")
                 detected_symbols.append(symbol)
                 confidences.append(confidence)
-
-            # Build equation string
-            equation = "".join(detected_symbols)
-
-            # Try to evaluate the equation
+            
+            # Build response
             try:
-                calc_eq = equation.replace("×", "*").replace("÷", "/")
-                if "=" in calc_eq:
-                    expression = equation.replace("=","")
-                    operation = "simplify"
-                    req = requests.get(f"https://newton.now.sh/api/v2/{operation}/{expression}")
-                    data = req.json()
-                    solution = data["result"]
-                else:
-                    try:
-                        result = eval(calc_eq)
-                        solution = f"Result: {result}"
-                    except:
-                        solution = "Building equation: " + equation
-            except:
-                solution = "Building equation: " + equation
-
-            # Clean up
-            os.remove(filepath)
-
-            # Calculate average confidence
-            avg_confidence = sum(confidences) / len(confidences)
-
-            return jsonify(
-                {
-                    "equation": equation,
-                    "solution": solution,
-                    "confidence": f"{avg_confidence * 100:.2f}%",
-                    "num_symbols": len(detected_symbols),
+                equation = ' '.join(detected_symbols)
+                print(f"Final equation: {equation}")
+                
+                last_symbol = detected_symbols[-1] if detected_symbols else ""
+                last_confidence = confidences[-1] if confidences else 0
+                avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+                
+                response = {
+                    'equation': equation,
+                    'solution': "Building equation: " + equation,
+                    'confidence': f"{avg_confidence * 100:.2f}%",
+                    'num_symbols': len(detected_symbols),
+                    'last_symbol': last_symbol,
+                    'last_confidence': f"{last_confidence * 100:.2f}%"
                 }
-            )
-
+                print(f"Sending response: {response}")
+                return jsonify(response)
+            except Exception as e:
+                print(f"Error building response: {e}")
+                return jsonify({'error': f'Error building response: {str(e)}'})
+            
         except Exception as e:
             print(f"Error in prediction: {e}")
-            return jsonify({"error": str(e)})
-
-    return jsonify({"error": "Invalid file type"})
+            import traceback
+            traceback.print_exc()
+            return jsonify({'error': str(e)})
+    
+    return jsonify({'error': 'Invalid file type'})
 
 
 if __name__ == "__main__":
