@@ -50,14 +50,19 @@
         }
 
         #preview-container {
-            margin-top: 20px;
+            margin: 20px auto;
             text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            max-width: 95%;
         }
 
         #preview {
-            max-width: 95%;
+            width: 100%;
             max-height: 300px;
-            margin: 20px auto;
+            object-fit: contain;
             border-radius: 5px;
             box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
         }
@@ -92,7 +97,7 @@
             border: none;
             border-radius: 5px;
             cursor: pointer;
-            margin-top: 10px;
+            width: 200px;
             position: relative;
             top: 0;
             transition: all 0.3s ease;
@@ -125,9 +130,7 @@
 
     <div id="preview-container" style="display: none;">
         <img id="preview">
-        <button id="solve-button" class="upload-button">Add to Equation</button>
-        <button id="clear-button" class="clear-button">Clear Image</button>
-        <button onclick="clearEquation()" class="clear-button">Clear Equation</button>
+        <button id="clear-button" class="clear-button">Clear All</button>
     </div>
 
     <div id="loading" style="display: none;">
@@ -147,7 +150,6 @@
         const preview = document.getElementById('preview');
         const result = document.getElementById('result');
         const loading = document.getElementById('loading');
-        const solveButton = document.getElementById('solve-button');
         const clearButton = document.getElementById('clear-button');
 
         fileInput.addEventListener('change', function (e) {
@@ -156,7 +158,8 @@
                 const reader = new FileReader();
                 reader.onload = function (e) {
                     preview.src = e.target.result;
-                    previewContainer.style.display = 'block';
+                    previewContainer.style.display = 'flex';
+                    uploadAndPredict(file);
                 }
                 reader.readAsDataURL(file);
             }
@@ -167,13 +170,15 @@
             result.style.display = 'none';
             fileInput.value = '';
             preview.src = '';
-        });
-
-        solveButton.addEventListener('click', function () {
-            const file = fileInput.files[0];
-            if (file) {
-                uploadAndPredict(file);
-            }
+            
+            fetch('/clear', {
+                method: 'POST'
+            })
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('detected-equation').textContent = '';
+                    document.getElementById('solution').textContent = '';
+                });
         });
 
         function uploadAndPredict(file) {
@@ -204,17 +209,6 @@
                     loading.style.display = 'none';
                     showError('An error occurred while processing the image');
                     console.error('Error:', error);
-                });
-        }
-
-        function clearEquation() {
-            fetch('/clear', {
-                method: 'POST'
-            })
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('detected-equation').textContent = '';
-                    document.getElementById('solution').textContent = '';
                 });
         }
 
