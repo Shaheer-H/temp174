@@ -109,6 +109,25 @@
             box-shadow: 0 5px 15px rgba(217, 83, 79, 0.4);
         }
 
+        .redo-button {
+            background-color: #5cb85c;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 200px;
+            position: relative;
+            top: 0;
+            transition: all 0.3s ease;
+        }
+
+        .redo-button:hover {
+            background-color: #4cae4c;
+            top: -5px;
+            box-shadow: 0 5px 15px rgba(92, 184, 92, 0.4);
+        }
+
         .solution {
             font-size: 24px;
             font-weight: bold;
@@ -130,7 +149,7 @@
 
     <div id="preview-container" style="display: none;">
         <img id="preview">
-        <button id="detect-again" class="clear-button" style="background-color: #5cb85c; margin-right: 10px;">Detect Again</button>
+        <button id="detect-again" class="redo-button" >Detect Again</button>
         <button id="clear-button" class="clear-button">Clear All</button>
     </div>
 
