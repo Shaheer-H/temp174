@@ -211,8 +211,12 @@ def process_single_symbol(symbol, x, y):
 
     # Thresholding to clean up any artifacts
     _, processed_symbol = cv2.threshold(processed_symbol, 127, 255, cv2.THRESH_BINARY)
-    
-    return processed_symbol
+
+    # Fill in the symbol to match training data style
+    filled_symbol = fill_symbol(processed_symbol)
+
+    # Return the filled version instead of applying more processing
+    return filled_symbol
 
 def to_tensor(image_array, transform, device):
     """Convert image array to tensor with debugging"""
@@ -306,6 +310,7 @@ def get_prediction(image_tensor, model, symbol_num=0, type_threshold=0.8):
         return symbol, confidence
 
 def save_predictions(digit_probs, oper_probs, digi_pred, digit_conf, oper_pred, oper_conf, symbol_num):
+    #Format probabilities for verification
     modelPredictions = {
         'digits_probabilities': {
             digit_classes[i]: float(prob) for i, prob in enumerate(digit_probs[0])
@@ -323,6 +328,7 @@ def save_predictions(digit_probs, oper_probs, digi_pred, digit_conf, oper_pred, 
         }
     }    
 
+    #Format probabilities for verification
     debug_file = f'debug_output/prediction_debug_{symbol_num}.json'
     with open(debug_file, 'w') as f:
         json.dump(modelPredictions, f, indent=2)
@@ -369,26 +375,16 @@ def predict():
             # Build response
             try:
                 equation = ''.join(detected_symbols)
-                calc_eq = equation.replace("add", "+").replace("sub", "-").replace("mul", "*").replace("div", "%").replace("eq", "=").replace("dec", ".")
+                calc_eq = equation.replace("add", "+").replace("sub", "-").replace("mul", "*").replace("div", "%").replace("eq", "=").replace("dec", ".").replace("=", "")
                 print(f"Final equation: {calc_eq}")
-                
-                if "=" in calc_eq:
-                    #Solving for a variable
-                    #Implement system of equations
-                    if "x" or "y" or "z" in calc_eq:
-                        calc_eq = calc_eq.replace()
                     
-                    expression = calc_eq.replace("=", "")
-                    operation = "simplify"
+                expression = calc_eq
+                operation = "simplify"
                     
-                    req = requests.get(f"https://newton.now.sh/api/v2/{operation}/{expression}")
-                    data = req.json()
-                    solution = data["result"]
-                else:
-                    solution = calc_eq
+                req = requests.get(f"https://newton.now.sh/api/v2/{operation}/{expression}")
+                data = req.json()
+                solution = data["result"]
                     
-                last_symbol = detected_symbols[-1] if detected_symbols else ""
-                last_confidence = confidences[-1] if confidences else 0
                 avg_confidence = sum(confidences) / len(confidences) if confidences else 0
                 
                 response = {
@@ -396,8 +392,6 @@ def predict():
                     'solution': "Building equation: " + solution,
                     'confidence': f"{avg_confidence * 100:.2f}%",
                     'num_symbols': len(detected_symbols),
-                    'last_symbol': last_symbol,
-                    'last_confidence': f"{last_confidence * 100:.2f}%"
                 }
                 print(f"Sending response: {response}")
                 return jsonify(response)
