@@ -53,21 +53,26 @@ def segment_symbols(image_path):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
+    # Create a color image for visualization
+    debug_img = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
+    
     # Get all components
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-        thresh, connectivity=8
-    )
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(thresh, connectivity=8)
 
-    # Debug: Print all component stats
-    print("\nAll Components:")
+    # Draw all components with different colors
+    colors = np.random.randint(0, 255, size=(num_labels, 3), dtype=np.uint8)
+    colors[0] = [255, 255, 255]  # Background color
     for i in range(1, num_labels):
         x, y, w, h, area = stats[i]
-        aspect = w / h if h > 0 else 0
-        print(
-            f"Component {i}: x={x}, y={y}, w={w}, h={h}, area={area}, aspect={aspect:.2f}"
-        )
+        # Draw bounding box
+        cv2.rectangle(debug_img, (x, y), (x+w, y+h), colors[i].tolist(), 2)
+        # Add component number
+        cv2.putText(debug_img, str(i), (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colors[i].tolist(), 2)
 
-    # Separate horizontal lines and regular components
+    # Save initial components image
+    cv2.imwrite("debug_output/all_components.png", debug_img)
+
+    # Separate components into categories
     horizontal_lines = []
     regular_components = []
     min_area = 5
@@ -78,110 +83,146 @@ def segment_symbols(image_path):
             continue
 
         aspect_ratio = w / h if h > 0 else 0
-        if (aspect_ratio > 2 and h <= 15) or (w > 15 and h <= 5):
-            print(
-                f"Found horizontal line: Component {i} with aspect ratio {aspect_ratio:.2f}"
-            )
-            horizontal_lines.append({"id": i, "x": x, "y": y, "w": w, "h": h})
+        
+        # Decimal point detection
+        if (15 <= w <= 20 and 15 <= h <= 20 and 
+            abs(w - h) <= 3 and area < 300):
+            print(f"Potential decimal point found: area={area}, w={w}, h={h}")
+            regular_components.append({
+                "id": i, "x": x, "y": y, "w": w, "h": h, 
+                "is_decimal": True
+            })
+        # Horizontal line detection
+        elif aspect_ratio > 2 or (w > 15 and h <= 5):
+            horizontal_lines.append({
+                "id": i, "x": x, "y": y, "w": w, "h": h
+            })
         else:   
-            regular_components.append({"id": i, "x": x, "y": y, "w": w, "h": h})
+            regular_components.append({
+                "id": i, "x": x, "y": y, "w": w, "h": h
+            })
 
-    # Draw debug visualization for pre-merge components
-    debug_pre = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    for comp in horizontal_lines:
-        x, y, w, h = comp["x"], comp["y"], comp["w"], comp["h"]
-        cv2.rectangle(debug_pre, (x, y), (x + w, y + h), (0, 0, 255), 1)
-    for comp in regular_components:
-        x, y, w, h = comp["x"], comp["y"], comp["w"], comp["h"]
-        cv2.rectangle(debug_pre, (x, y), (x + w, y + h), (0, 255, 0), 1)
-    cv2.imwrite("debug_output/pre_merge.png", debug_pre)
+    # Print initial components
+    print("\nInitial components:")
+    for i, comp in enumerate(regular_components):
+        print(f"Regular {i}: x={comp['x']}, y={comp['y']}, w={comp['w']}, h={comp['h']}")
+    
+    print("\nHorizontal lines:")
+    for i, line in enumerate(horizontal_lines):
+        print(f"Line {i}: x={line['x']}, y={line['y']}, w={line['w']}, h={line['h']}")
 
-    # Merge horizontal lines into equals signs
+    # Group horizontal lines by x-position
+    right_lines = []  # Lines at x > 1700
+    other_lines = []  # Other lines
+    
+    for line in horizontal_lines:
+        if line["x"] > 1700:
+            right_lines.append(line)
+        else:
+            other_lines.append(line)
+    
+    print("\nGrouped horizontal lines:")
+    print("Right lines:", len(right_lines))
+    for line in right_lines:
+        print(f"  x={line['x']}, y={line['y']}, w={line['w']}, h={line['h']}")
+    print("Other lines:", len(other_lines))
+    for line in other_lines:
+        print(f"  x={line['x']}, y={line['y']}, w={line['w']}, h={line['h']}")
+
+    # Initialize merged_components with regular components
     merged_components = regular_components.copy()
-    horizontal_lines.sort(key=lambda x: x["y"])
-
-    i = 0
-    while i < len(horizontal_lines) - 1:
-        line1 = horizontal_lines[i]
-        line2 = horizontal_lines[i + 1]
-
-        vertical_gap = line2["y"] - (line1["y"] + line1["h"])
-        x_overlap = min(line1["x"] + line1["w"], line2["x"] + line2["w"]) - max(
-            line1["x"], line2["x"]
-        )
-
-        if vertical_gap < 15 and x_overlap > 0:
-            x = min(line1["x"], line2["x"])
-            y = line1["y"]
-            w = max(line1["x"] + line1["w"], line2["x"] + line2["w"]) - x
-            h = line2["y"] + line2["h"] - y
-
-            merged_components.append(
-                {"id": -1, "x": x, "y": y, "w": w, "h": h, "is_equals": True}
-            )
-            i += 2
-        else:
-            i += 1
-
-    # Sort components in natural reading order
-    row_threshold = max(comp["h"] for comp in merged_components) * 0.5
-    merged_components.sort(key=lambda c: c["y"])
-
-    rows = []
-    current_row = [merged_components[0]]
-
-    for comp in merged_components[1:]:
-        if abs(comp["y"] - current_row[0]["y"]) < row_threshold:
-            current_row.append(comp)
-        else:
-            rows.append(sorted(current_row, key=lambda c: c["x"]))
-            current_row = [comp]
-
-    if current_row:
-        rows.append(sorted(current_row, key=lambda c: c["x"]))
-
-    merged_components = [comp for row in rows for comp in row]
-
-    # Draw final debug visualization
-    debug_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    print("\nInitial merged components:")
     for i, comp in enumerate(merged_components):
-        x, y, w, h = comp["x"], comp["y"], comp["w"], comp["h"]
-        color = (0, 0, 255) if comp.get("is_equals", False) else (0, 255, 0)
-        cv2.rectangle(debug_img, (x, y), (x + w, y + h), color, 1)
-        cv2.putText(
-            debug_img,
-            f"{i}:{w}x{h}",
-            (x, y - 5),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            color,
-            1,
-        )
-    cv2.imwrite("debug_output/final_components.png", debug_img)
+        print(f"Component {i}: x={comp['x']}, y={comp['y']}, w={comp['w']}, h={comp['h']}")
 
-    # Extract and process symbols
+    # Process equals sign (rightmost lines)
+    if len(right_lines) >= 2:
+        line1, line2 = right_lines[0], right_lines[1]
+        vertical_gap = abs(line2["y"] - (line1["y"] + line1["h"]))
+        width_diff = abs(line1["w"] - line2["w"])
+        x_diff = abs(line1["x"] - line2["x"])
+        
+        print(f"\nChecking potential equals sign:")
+        print(f"  Vertical gap: {vertical_gap}")
+        print(f"  Width difference: {width_diff}")
+        print(f"  X position difference: {x_diff}")
+        
+        if vertical_gap < 100 and width_diff < 50 and x_diff < 50:
+            print(f"Found equals sign at y={line1['y']}")
+            merged_components.append({
+                "id": -1,
+                "x": min(line1["x"], line2["x"]),
+                "y": min(line1["y"], line2["y"]),
+                "w": max(line1["w"], line2["w"]),
+                "h": max(line2["y"] + line2["h"], line1["y"] + line1["h"]) - 
+                     min(line1["y"], line2["y"]),
+                "is_equals": True
+            })
+
+    # Process division (other lines) and remove associated decimal points
+    if len(other_lines) >= 1:
+        line = other_lines[0]
+        # Find decimal points near the division line
+        dots_near_line = []
+        
+        for comp in merged_components:
+            if comp.get('is_decimal'):
+                x_dist = abs(comp["x"] - line["x"])
+                y_dist = abs(comp["y"] - line["y"])
+                if y_dist < 100:  # Within 50 pixels vertically
+                    dots_near_line.append(comp)
+                    print(f"Found dot near line: x={comp['x']}, y={comp['y']}")
+        
+        if len(dots_near_line) >= 2:  # Need at least 2 dots for division
+            print(f"Found division sign at y={line['y']} with {len(dots_near_line)} dots")
+            
+            # Create division component
+            merged_components.append({
+                "id": -1,
+                "x": line["x"],
+                "y": min(d["y"] for d in dots_near_line),
+                "w": line["w"],
+                "h": max(d["y"] + d["h"] for d in dots_near_line) - min(d["y"] for d in dots_near_line),
+                "is_division": True
+            })
+            
+            # Remove the decimal points that are part of division
+            print(f"Removing {len(dots_near_line)} decimal points that are part of division")
+            merged_components = [comp for comp in merged_components 
+                               if comp not in dots_near_line]
+
+    # Sort by x position (removed the equals sign filtering)
+    merged_components.sort(key=lambda c: c["x"])
+    
+    # Create debug output for final components
+    print("\nFinal components after division processing:")
+    for i, comp in enumerate(merged_components):
+        comp_type = 'regular'
+        if comp.get('is_equals'): comp_type = 'equals'
+        elif comp.get('is_division'): comp_type = 'division'
+        elif comp.get('is_decimal'): comp_type = 'decimal'
+        print(f"Component {i}: type={comp_type}, x={comp['x']}, y={comp['y']}")
+
+    # Process components into symbols
     symbol_images = []
+    print("\nProcessing components into symbols:")
     for i, comp in enumerate(merged_components):
-        x, y, w, h = comp["x"], comp["y"], comp["w"], comp["h"]
-        
-        # Extract region
-        x1 = max(0, x)
-        y1 = max(0, y)
-        x2 = min(gray.shape[1], x + w)
-        y2 = min(gray.shape[0], y + h)
-
-        symbol_region = thresh[y1:y2, x1:x2]
-        symbol_region = cv2.bitwise_not(symbol_region)
-
-        #Save preprocessed image
-        cv2.imwrite(f"debug_output/preprocessed_symbol_{i}_x{x}_y{y}.png", symbol_region)
-
-        # Process symbol
-        processed_symbol = process_single_symbol(symbol_region, (x2 - x1), (y2 - y1))
-        
-        # Save debug image
-        cv2.imwrite(f"debug_output/processed_symbol_{i}_x{x}_y{y}.png", processed_symbol)
-        symbol_images.append(processed_symbol)
+        if comp.get('is_equals'):
+            print(f"Component {i}: Adding equals sign")
+            symbol_images.append('eq')
+        elif comp.get('is_division'):
+            print(f"Component {i}: Adding division sign")
+            symbol_images.append('div')
+        elif comp.get('is_decimal'):
+            print(f"Component {i}: Adding decimal point")
+            symbol_images.append('dec')
+        else:
+            print(f"Component {i}: Processing regular symbol at x={comp['x']}, y={comp['y']}")
+            x, y, w, h = comp["x"], comp["y"], comp["w"], comp["h"]
+            symbol_region = thresh[y:y+h, x:x+w]
+            symbol_region = cv2.bitwise_not(symbol_region)
+            processed_symbol = process_single_symbol(symbol_region, w, h)
+            symbol_images.append(processed_symbol)
 
     return symbol_images
 
@@ -329,6 +370,16 @@ def save_predictions(digit_probs, oper_probs, digi_pred, digit_conf, oper_pred, 
     with open(debug_file, 'w') as f:
         json.dump(modelPredictions, f, indent=2)
 
+def clear_debug_output():
+    """Clear all files in debug_output directory"""
+    for file in os.listdir("debug_output"):
+        file_path = os.path.join("debug_output", file)
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            print(f"Error deleting {file_path}: {e}")
+
 @app.route("/")
 def home():
     return render_template("index.html")
@@ -338,6 +389,9 @@ def home():
 def predict():
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'})
+    
+    # Clear debug output directory
+    clear_debug_output()
     
     file = request.files['file']
     if file.filename == '':
@@ -362,45 +416,101 @@ def predict():
             confidences = []
             
             for i, symbol_image in enumerate(symbol_images):
+                # Handle special symbols
+                if isinstance(symbol_image, str):
+                    if symbol_image == 'dec':
+                        detected_symbols.append('.')
+                    elif symbol_image == 'eq':
+                        detected_symbols.append('=')
+                    elif symbol_image == 'sub':
+                        detected_symbols.append('-')
+                    elif symbol_image == 'div':
+                        detected_symbols.append('÷')
+                    confidences.append(1.0)
+                    continue
+                
+                # Normal processing for other symbols
                 image_tensor = to_tensor(symbol_image, transform, device)
                 symbol, confidence = get_prediction(image_tensor, model, symbol_num=i)
                 print(f"Symbol {i}: {symbol} (confidence: {confidence:.2f})")
                 detected_symbols.append(symbol)
                 confidences.append(confidence)
             
-            # Build response
+            # Build equation string
+            equation = ' '.join(detected_symbols)
+            
+            # Try to evaluate the equation
             try:
-                equation = ''.join(detected_symbols)
-                calc_eq = equation.replace("add", "+").replace("sub", "-").replace("mul", "*").replace("div", "%").replace("eq", "=").replace("dec", ".").replace("=", "")
-                print(f"Final equation: {calc_eq}")
+                if '=' in equation:
+                    # Split equation at equals sign and evaluate left side
+                    left_side = equation.split('=')[0]
+                    # Convert operators before evaluation
+                    left_side = left_side.strip().replace('×', '*').replace('÷', '/').replace('add', '+').replace('sub', '-').replace('mul', '*')
                     
-                expression = calc_eq
-                operation = "simplify"
+                    # Remove spaces between consecutive digits
+                    parts = left_side.split()
+                    cleaned_expr = ''
+                    current_number = ''
                     
-                req = requests.get(f"https://newton.now.sh/api/v2/{operation}/{expression}")
-                data = req.json()
-                solution = data["result"]
+                    for part in parts:
+                        if part.isdigit():
+                            current_number += part
+                        else:
+                            if current_number:
+                                cleaned_expr += ' ' + current_number + ' '
+                                current_number = ''
+                            cleaned_expr += part + ' '
                     
-                avg_confidence = sum(confidences) / len(confidences) if confidences else 0
-                
-                response = {
-                    'equation': equation,
-                    'solution': "Building equation: " + solution,
-                    'confidence': f"{avg_confidence * 100:.2f}%",
-                    'num_symbols': len(detected_symbols),
-                }
-                print(f"Sending response: {response}")
-                return jsonify(response)
+                    # Add any remaining number
+                    if current_number:
+                        cleaned_expr += current_number
+                    
+                    cleaned_expr = cleaned_expr.strip()
+                    print(f"Cleaned expression: {cleaned_expr}")  # Debug print
+                    
+                    try:
+                        result = eval(cleaned_expr)
+                        solution = f"Result: {result}"
+                    except Exception as calc_error:
+                        print(f"Calculation error: {calc_error}")
+                        solution = equation
+                else:
+                    # Handle normal expressions (same cleaning for non-equation expressions)
+                    calc_eq = equation.replace('×', '*').replace('÷', '/').replace('add', '+').replace('sub', '-')
+                    parts = calc_eq.split()
+                    cleaned_expr = ''
+                    for i, part in enumerate(parts):
+                        if part.isdigit() or part == '.':
+                            if i > 0 and (parts[i-1].isdigit() or parts[i-1] == '.'):
+                                cleaned_expr += part
+                            else:
+                                cleaned_expr += ' ' + part
+                        else:
+                            cleaned_expr += ' ' + part
+                    
+                    result = eval(cleaned_expr.strip())
+                    solution = f"Result: {result}"
             except Exception as e:
-                print(f"Error building response: {e}")
-                return jsonify({'error': f'Error building response: {str(e)}'})
+                print(f"Evaluation error: {e}")
+                solution = equation
+            
+            # Clean up
+            os.remove(filepath)
+            
+            # Calculate average confidence
+            avg_confidence = sum(confidences) / len(confidences)
+            
+            return jsonify({
+                'equation': equation,
+                'solution': solution,
+                'confidence': f"{avg_confidence * 100:.2f}%",
+                'num_symbols': len(detected_symbols)
+            })
             
         except Exception as e:
             print(f"Error in prediction: {e}")
-            import traceback
-            traceback.print_exc()
             return jsonify({'error': str(e)})
-    
+        
     return jsonify({'error': 'Invalid file type'})
 
 

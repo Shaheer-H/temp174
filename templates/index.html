@@ -130,6 +130,7 @@
 
     <div id="preview-container" style="display: none;">
         <img id="preview">
+        <button id="detect-again" class="clear-button" style="background-color: #5cb85c; margin-right: 10px;">Detect Again</button>
         <button id="clear-button" class="clear-button">Clear All</button>
     </div>
 
@@ -151,6 +152,7 @@
         const result = document.getElementById('result');
         const loading = document.getElementById('loading');
         const clearButton = document.getElementById('clear-button');
+        const detectAgain = document.getElementById('detect-again');
 
         fileInput.addEventListener('change', function (e) {
             const file = e.target.files[0];
@@ -179,6 +181,12 @@
                     document.getElementById('detected-equation').textContent = '';
                     document.getElementById('solution').textContent = '';
                 });
+        });
+
+        detectAgain.addEventListener('click', function () {
+            if (preview.src) {  // If there's an image loaded
+                uploadAndPredict(fileInput.files[0]);  // Reuse the last uploaded file
+            }
         });
 
         function uploadAndPredict(file) {
