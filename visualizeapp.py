@@ -212,11 +212,7 @@ def process_single_symbol(symbol, x, y):
     # Thresholding to clean up any artifacts
     _, processed_symbol = cv2.threshold(processed_symbol, 127, 255, cv2.THRESH_BINARY)
 
-    # Fill in the symbol to match training data style
-    filled_symbol = fill_symbol(processed_symbol)
-
-    # Return the filled version instead of applying more processing
-    return filled_symbol
+    return processed_symbol
 
 def to_tensor(image_array, transform, device):
     """Convert image array to tensor with debugging"""
