@@ -185,33 +185,6 @@ def segment_symbols(image_path):
 
     return symbol_images
 
-def fill_symbol(image):
-    """Fill in outlined symbols to match training data style"""
-    # Ensure we have black text on white background
-    if image[0, 0] == 0:  # if background is black
-        image = cv2.bitwise_not(image)
-        
-    # Find contours with hierarchy
-    contours, hierarchy = cv2.findContours(
-        cv2.bitwise_not(image),  # invert to find black text
-        cv2.RETR_CCOMP,  # retrieve all contours and organize them into a hierarchy
-        cv2.CHAIN_APPROX_SIMPLE
-    )
-    
-    # Create a mask for filling
-    mask = np.ones_like(image) * 255
-    
-    # Fill all contours
-    for i, contour in enumerate(contours):
-        cv2.drawContours(mask, [contour], -1, 0, -1)  # -1 thickness means fill
-        
-    # Save debug image of contours
-    debug_contours = cv2.cvtColor(image.copy(), cv2.COLOR_GRAY2BGR)
-    cv2.drawContours(debug_contours, contours, -1, (0,255,0), 1)
-    cv2.imwrite("debug_output/contours_debug.png", debug_contours)
-    
-    return mask
-
 def process_single_symbol(symbol, x, y):
     """Process a single symbol image array"""
     #Our dataset is mostly comprised of 400x400 images
@@ -238,15 +211,8 @@ def process_single_symbol(symbol, x, y):
 
     # Thresholding to clean up any artifacts
     _, processed_symbol = cv2.threshold(processed_symbol, 127, 255, cv2.THRESH_BINARY)
-
-    # Fill in the symbol to match training data style
-    filled_symbol = fill_symbol(processed_symbol)
     
-    # Save filled symbol before further processing
-    cv2.imwrite(f"debug_output/filled_symbol_x{x}_y{y}.png", filled_symbol)
-
-    # Return the filled version instead of applying more processing
-    return filled_symbol
+    return processed_symbol
 
 def to_tensor(image_array, transform, device):
     """Convert image array to tensor with debugging"""
