@@ -201,7 +201,7 @@
                         showError(data.error);
                     } else {
                         document.getElementById('detected-equation').textContent =
-                            `Current Equation: ${data.equation}\nLast Detected: ${data.last_detected} (Confidence: ${data.confidence})`;
+                            `Current Equation: ${data.equation} (Confidence: ${data.confidence})`;
                         document.getElementById('solution').textContent = data.solution;
                     }
                 })
